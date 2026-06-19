@@ -2,7 +2,7 @@
 
 火山引擎豆包 MCP Server：文生图、文生视频、图生视频，以及视频任务的异步管理。基于 [`superproxy/doubao_mcp_server`](https://github.com/superproxy/doubao_mcp_server) 修改而来，支持通过环境变量配置 `DOUBAO_BASE_URL` 与默认模型。代码模块名为 `seedance_mcp_server`，PyPI 包名 / CLI 入口为 `seedance-mcp-server`。
 
-当前版本：**v2.2.2**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
+当前版本：**v2.3.0**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
 
 ## 环境变量
 
@@ -42,7 +42,7 @@
 | `cancel_video_task` | 异步 | 取消或删除任务 |
 | `encode_image_to_base64` | 工具 | 把本地图片编码成 base64，便于 `image_to_video` 使用 |
 
-视频工具走 `POST/GET/DELETE /contents/generations/tasks`；同步工具默认轮询上限 30 分钟（`poll_interval=5s`，`poll_max_retries=360`），可在调用时覆盖。
+视频工具走 `POST/GET/DELETE /contents/generations/tasks`；同步工具默认轮询上限 **5 分钟**（`poll_interval=5s`，`poll_max_retries=60`），可在调用时覆盖。耗时较长的任务建议直接使用 `create_video_task` + `get_video_task` 异步轮询，避免 MCP 客户端 RPC 超时。
 
 ### 视频高级参数
 
@@ -63,7 +63,7 @@
 | `reference_videos` | list[str] | 参考视频 URL 列表 |
 | `reference_audios` | list[str] | 参考音频 URL 列表 |
 
-`image_to_video` 额外提供 `last_frame_url / last_frame_base64 / last_frame_path` 用于尾帧。
+`image_to_video` 额外提供 `last_frame_url / last_frame_base64 / last_frame_path` 用于尾帧；`image_mime` 与 `last_frame_mime` 各自独立，避免首尾帧 MIME 互相污染。
 
 ### 调用示例
 
@@ -173,11 +173,19 @@ UV_INDEX_URL=https://pypi.org/simple uvx --refresh seedance-mcp-server
 
 ## 资源
 
-- `config://settings`：返回当前生效的 `base_url`、`api_key_set`、支持的 ratio / resolution / duration、工具清单等运行时配置，便于排查环境是否生效。
+- `config://settings`：返回当前生效的 `base_url`、`api_key_set`、默认轮询参数（`default_poll_interval_s` / `default_sync_max_retries`）、支持的 ratio / resolution / duration、工具清单等运行时配置，便于排查环境是否生效。
 - `config://models`：返回当前可用模型默认值。
 
 ## 版本历史
 
+- **2.3.0**
+  - 重构 `seedance_mcp_server.py`：`_doubao_request` 兜底网络异常与非 dict 响应；`_wait_video_task` 先查后等，避免无谓首次 sleep；`_extract_task_id` 兼容 `id` / `task_id` / `data.id`
+  - 视频参数（`ratio` / `duration` / `resolution` / `seed` / `fps` / `camerafixed` / `generate_audio` / `watermark` / `negative_prompt`）统一改为顶层 JSON 字段，不再以 `--flag` 形式注入 prompt 文本
+  - `negative_prompt` 走顶层字段，对模型实际生效
+  - `image_to_video` 新增 `last_frame_mime` 参数，与 `image_mime` 独立
+  - `cancel_video_task` 改为先 `POST /cancel`，失败回退 `DELETE`
+  - 同步工具默认轮询上限调整为 5 分钟（`poll_max_retries=60`），长任务请使用 `create_video_task` + `get_video_task`
+  - 关键路径加 `logging`；新增 `tests/test_smoke.py`（45 用例）和 `tests/test_mcp_e2e.py`（stdio 端到端）
 - **2.2.2**
   - 同步发布到 PyPI 与 GitHub，覆盖之前 1.0.0 / 1.1.0 / 2.0.0 等被占用版本号
 - **2.0.0**

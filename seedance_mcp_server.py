@@ -1,15 +1,28 @@
 # seedance_mcp_server.py
-import time
+"""Seedance MCP Server: text-to-image / text-to-video / image-to-video.
+
+All configuration is read on demand via ``get_api_key()`` / ``get_base_url()`` /
+``_resolve_model()``. There are no module-level mutable globals on purpose so
+that environment changes always take effect without re-importing.
+"""
+
+from __future__ import annotations
+
 import base64
+import logging
 import mimetypes
 import os
-import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import requests
 from openai import OpenAI
 from mcp.server.fastmcp import FastMCP
+
+logger = logging.getLogger("seedance_mcp_server")
+if not logger.handlers:
+    logger.addHandler(logging.NullHandler())
 
 mcp = FastMCP("AI Generation Server")
 
@@ -21,8 +34,13 @@ DEFAULT_TEXT_TO_VIDEO_MODEL = "doubao-seedance-2-0-fast-260128"
 
 DEFAULT_HTTP_TIMEOUT = 60
 DEFAULT_TASK_POLL_INTERVAL = 5
-DEFAULT_TASK_POLL_MAX_RETRIES = 360  # 5s * 360 = 30min
+DEFAULT_TASK_POLL_MAX_RETRIES = 60  # 5s * 60 = 5min, suitable for sync MCP calls
+ASYNC_TASK_POLL_MAX_RETRIES = 360   # 30min, exposed via param for power users
 
+
+# ---------------------------------------------------------------------------
+# config accessors
+# ---------------------------------------------------------------------------
 
 def get_api_key() -> Optional[str]:
     return os.getenv("DOUBAO_API_KEY")
@@ -41,15 +59,27 @@ def _resolve_model(explicit: Optional[str], default: str) -> str:
     return default
 
 
-def _auth_headers() -> Dict[str, str]:
+def _require_api_key() -> str:
     api_key = get_api_key()
     if not api_key:
         raise ValueError("API key is required (set DOUBAO_API_KEY)")
+    return api_key
+
+
+def _auth_headers() -> Dict[str, str]:
     return {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {_require_api_key()}",
         "Content-Type": "application/json",
     }
 
+
+def initialize_client() -> OpenAI:
+    return OpenAI(api_key=_require_api_key(), base_url=get_base_url())
+
+
+# ---------------------------------------------------------------------------
+# HTTP wrapper
+# ---------------------------------------------------------------------------
 
 def _doubao_request(
     method: str,
@@ -59,84 +89,55 @@ def _doubao_request(
     json_body: Optional[Dict[str, Any]] = None,
     timeout: int = DEFAULT_HTTP_TIMEOUT,
 ) -> Dict[str, Any]:
+    """HTTP call into Doubao with uniform error envelope.
+
+    The returned dict always carries an ``_ok`` boolean. On success the parsed
+    JSON body is merged in (when it's a dict); otherwise we wrap the raw value
+    so callers don't need to special-case list responses.
+    """
     url = f"{get_base_url()}{path}"
-    resp = requests.request(
-        method,
-        url,
-        headers=_auth_headers(),
-        params=params,
-        json=json_body,
-        timeout=timeout,
-    )
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=_auth_headers(),
+            params=params,
+            json=json_body,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        logger.warning("doubao request failed: %s %s -> %s", method, path, exc)
+        return {"_ok": False, "status_code": 0, "error": f"network error: {exc}"}
+    except ValueError as exc:
+        # _require_api_key() raises ValueError when key missing
+        return {"_ok": False, "status_code": 0, "error": str(exc)}
+
     if resp.status_code >= 400:
         return {
             "_ok": False,
             "status_code": resp.status_code,
             "error": resp.text,
         }
+
     if not resp.content:
-        return {"_ok": True, "status_code": resp.status_code}
+        return {"_ok": True, "_status_code": resp.status_code}
+
     try:
         data = resp.json()
     except ValueError:
-        return {"_ok": True, "status_code": resp.status_code, "raw": resp.text}
-    data["_ok"] = True
-    data["_status_code"] = resp.status_code
-    return data
+        return {"_ok": True, "_status_code": resp.status_code, "raw": resp.text}
 
-
-def initialize_client() -> OpenAI:
-    api_key = get_api_key()
-    if not api_key:
-        raise ValueError("API key is required")
-    return OpenAI(api_key=api_key, base_url=get_base_url())
+    if isinstance(data, dict):
+        out = dict(data)
+        out["_ok"] = True
+        out["_status_code"] = resp.status_code
+        return out
+    return {"_ok": True, "_status_code": resp.status_code, "data": data}
 
 
 # ---------------------------------------------------------------------------
-# image / video content helpers
+# image helpers
 # ---------------------------------------------------------------------------
-
-_PROMPT_FLAG_PATTERNS = {
-    "ratio": re.compile(r"--ratio\s"),
-    "duration": re.compile(r"--(duration|dur)\s"),
-    "resolution": re.compile(r"--rs\s|--resolution\s"),
-    "seed": re.compile(r"--seed\s"),
-    "fps": re.compile(r"--fps\s"),
-    "camerafixed": re.compile(r"--camerafixed\s"),
-    "watermark": re.compile(r"--watermark\s"),
-}
-
-
-def _maybe_append_flag(prompt: str, flag: str, value: Any) -> str:
-    if value is None or value == "":
-        return prompt
-    if _PROMPT_FLAG_PATTERNS[flag].search(prompt):
-        return prompt
-    return f"{prompt} --{flag} {value}"
-
-
-def _build_prompt_with_flags(
-    prompt: str,
-    *,
-    ratio: Optional[str] = None,
-    duration: Optional[Union[int, str]] = None,
-    resolution: Optional[str] = None,
-    seed: Optional[int] = None,
-    fps: Optional[int] = None,
-    camerafixed: Optional[bool] = None,
-    watermark: Optional[bool] = None,
-) -> str:
-    prompt = _maybe_append_flag(prompt, "ratio", ratio)
-    prompt = _maybe_append_flag(prompt, "duration", duration)
-    prompt = _maybe_append_flag(prompt, "resolution", resolution)
-    prompt = _maybe_append_flag(prompt, "seed", seed)
-    prompt = _maybe_append_flag(prompt, "fps", fps)
-    if camerafixed is not None:
-        prompt = _maybe_append_flag(prompt, "camerafixed", str(camerafixed).lower())
-    if watermark is not None:
-        prompt = _maybe_append_flag(prompt, "watermark", str(watermark).lower())
-    return prompt
-
 
 def _resolve_image_to_url(
     image_url: Optional[str],
@@ -144,7 +145,7 @@ def _resolve_image_to_url(
     image_path: Optional[str],
     mime_type: Optional[str] = None,
 ) -> str:
-    """把 url / base64 / 本地路径统一转成可投递给 Doubao 的字符串 URL。"""
+    """Normalize one of (url / base64 / local path) into a data URL string."""
     sources = [s for s in (image_url, image_base64, image_path) if s]
     if len(sources) != 1:
         raise ValueError(
@@ -163,10 +164,22 @@ def _resolve_image_to_url(
         return f"data:{guessed};base64,{encoded}"
 
     # image_base64
-    mime = mime_type or "image/jpeg"
+    assert image_base64 is not None
     if image_base64.startswith("data:"):
         return image_base64
+    mime = mime_type or "image/jpeg"
     return f"data:{mime};base64,{image_base64}"
+
+
+def _normalize_image_inputs(
+    image_url: Optional[str],
+    image_base64: Optional[str],
+    image_path: Optional[str],
+    image_mime: Optional[str],
+) -> Optional[str]:
+    if not any((image_url, image_base64, image_path)):
+        return None
+    return _resolve_image_to_url(image_url, image_base64, image_path, image_mime)
 
 
 def _build_reference_part(role: str, kind: str, url: str) -> Dict[str, Any]:
@@ -176,16 +189,94 @@ def _build_reference_part(role: str, kind: str, url: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# task helpers
+# video task helpers
 # ---------------------------------------------------------------------------
 
-def _create_video_task(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return _doubao_request(
-        "POST", "/contents/generations/tasks", json_body=payload
-    )
+def _build_video_payload(
+    *,
+    model: str,
+    prompt: str,
+    ratio: Optional[str],
+    duration: Optional[Union[int, str]],
+    resolution: Optional[str],
+    seed: Optional[int],
+    fps: Optional[int],
+    camerafixed: Optional[bool],
+    generate_audio: Optional[bool],
+    watermark: Optional[bool],
+    negative_prompt: Optional[str],
+    first_frame: Optional[str],
+    last_frame: Optional[str],
+    reference_images: Optional[List[str]],
+    reference_videos: Optional[List[str]],
+    reference_audios: Optional[List[str]],
+) -> Dict[str, Any]:
+    """Build the Doubao /contents/generations/tasks payload.
+
+    Note: parameters such as ratio/duration/resolution/seed/fps/camerafixed/
+    generate_audio/watermark/negative_prompt are sent as **top-level fields**.
+    They are no longer duplicated as ``--flag`` suffixes inside ``prompt``.
+    """
+    content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+    if first_frame:
+        content.append(_build_reference_part("first_frame", "image_url", first_frame))
+    if last_frame:
+        content.append(_build_reference_part("last_frame", "image_url", last_frame))
+    for url in reference_images or []:
+        content.append(_build_reference_part("reference_image", "image_url", url))
+    for url in reference_videos or []:
+        content.append(_build_reference_part("reference_video", "video_url", url))
+    for url in reference_audios or []:
+        content.append(_build_reference_part("reference_audio", "audio_url", url))
+
+    payload: Dict[str, Any] = {"model": model, "content": content}
+
+    if ratio:
+        payload["ratio"] = ratio
+    if duration is not None:
+        try:
+            payload["duration"] = int(duration)
+        except (TypeError, ValueError):
+            payload["duration"] = duration
+    if resolution:
+        payload["resolution"] = resolution
+    if seed is not None:
+        payload["seed"] = seed
+    if fps is not None:
+        payload["fps"] = fps
+    if camerafixed is not None:
+        payload["camerafixed"] = camerafixed
+    if generate_audio is not None:
+        payload["generate_audio"] = generate_audio
+    if watermark is not None:
+        payload["watermark"] = watermark
+    if negative_prompt:
+        payload["negative_prompt"] = negative_prompt
+
+    return payload
 
 
-def _get_video_task(task_id: str) -> Dict[str, Any]:
+def _extract_task_id(data: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    for key in ("id", "task_id"):
+        value = data.get(key)
+        if value:
+            return value
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        for key in ("id", "task_id"):
+            value = nested.get(key)
+            if value:
+                return value
+    return None
+
+
+def _create_video_task_raw(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return _doubao_request("POST", "/contents/generations/tasks", json_body=payload)
+
+
+def _get_video_task_raw(task_id: str) -> Dict[str, Any]:
     return _doubao_request("GET", f"/contents/generations/tasks/{task_id}")
 
 
@@ -194,10 +285,10 @@ def _wait_video_task(
     poll_interval: int = DEFAULT_TASK_POLL_INTERVAL,
     max_retries: int = DEFAULT_TASK_POLL_MAX_RETRIES,
 ) -> Dict[str, Any]:
-    last_status = None
-    for _ in range(max_retries):
-        time.sleep(poll_interval)
-        data = _get_video_task(task_id)
+    """Poll a task. Queries first, then sleeps between attempts."""
+    last_status: Optional[str] = None
+    for attempt in range(max_retries):
+        data = _get_video_task_raw(task_id)
         if not data.get("_ok"):
             return {
                 "success": False,
@@ -224,12 +315,39 @@ def _wait_video_task(
                 "status": status,
                 "error": data.get("error") or f"任务{status}",
             }
+        if attempt < max_retries - 1:
+            time.sleep(poll_interval)
     return {
         "success": False,
         "task_id": task_id,
         "status": last_status,
-        "error": f"轮询超时（>{poll_interval * max_retries // 60}min）",
+        "error": (
+            f"轮询超时（>{poll_interval * max_retries}s）"
+            "；可改用 create_video_task + get_video_task 异步轮询"
+        ),
     }
+
+
+def _run_sync_video_task(
+    payload: Dict[str, Any],
+    poll_interval: int,
+    poll_max_retries: int,
+) -> Dict[str, Any]:
+    created = _create_video_task_raw(payload)
+    if not created.get("_ok"):
+        return {
+            "success": False,
+            "error": f"创建任务失败: {created.get('error')}",
+        }
+    task_id = _extract_task_id(created)
+    if not task_id:
+        return {"success": False, "error": "未获取到任务ID", "raw": _strip_meta(created)}
+    logger.info("created video task %s", task_id)
+    return _wait_video_task(task_id, poll_interval, poll_max_retries)
+
+
+def _strip_meta(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
 # ---------------------------------------------------------------------------
@@ -274,23 +392,20 @@ def text_to_image(
             params["seed"] = seed
         if guidance_scale is not None:
             params["guidance_scale"] = guidance_scale
-        # watermark 经由 extra_body 传递（OpenAI 客户端不识别该字段）
-        params["extra_body"] = {"watermark": watermark}
+        if watermark:
+            params["extra_body"] = {"watermark": True}
 
         response = client.images.generate(**params)
-
         if not response.data:
             return {"success": False, "error": "未返回图片数据"}
 
-        images: List[Dict[str, Any]] = []
-        for item in response.data:
-            images.append(
-                {
-                    "url": getattr(item, "url", None),
-                    "b64_json": getattr(item, "b64_json", None),
-                }
-            )
-
+        images: List[Dict[str, Any]] = [
+            {
+                "url": getattr(item, "url", None),
+                "b64_json": getattr(item, "b64_json", None),
+            }
+            for item in response.data
+        ]
         primary = images[0]
         return {
             "success": True,
@@ -300,92 +415,14 @@ def text_to_image(
             "images": images,
             "message": "图片生成成功",
         }
-
     except Exception as e:  # noqa: BLE001
+        logger.exception("text_to_image failed")
         return {"success": False, "error": f"生成图片时出错: {e}"}
 
 
 # ---------------------------------------------------------------------------
-# tools - video helpers (sync convenience + async primitives)
+# tools - video (sync convenience)
 # ---------------------------------------------------------------------------
-
-def _build_video_payload(
-    *,
-    model: str,
-    prompt: str,
-    ratio: Optional[str],
-    duration: Optional[Union[int, str]],
-    resolution: Optional[str],
-    seed: Optional[int],
-    fps: Optional[int],
-    camerafixed: Optional[bool],
-    generate_audio: Optional[bool],
-    watermark: Optional[bool],
-    negative_prompt: Optional[str],
-    first_frame: Optional[str],
-    last_frame: Optional[str],
-    reference_images: Optional[List[str]],
-    reference_videos: Optional[List[str]],
-    reference_audios: Optional[List[str]],
-) -> Dict[str, Any]:
-    final_prompt = _build_prompt_with_flags(
-        prompt,
-        ratio=ratio,
-        duration=duration,
-        resolution=resolution,
-        seed=seed,
-        fps=fps,
-        camerafixed=camerafixed,
-    )
-    if negative_prompt:
-        final_prompt = f"{final_prompt}\nNegative prompt: {negative_prompt}"
-
-    content: List[Dict[str, Any]] = [{"type": "text", "text": final_prompt}]
-
-    if first_frame:
-        content.append(_build_reference_part("first_frame", "image_url", first_frame))
-    if last_frame:
-        content.append(_build_reference_part("last_frame", "image_url", last_frame))
-    for url in reference_images or []:
-        content.append(_build_reference_part("reference_image", "image_url", url))
-    for url in reference_videos or []:
-        content.append(_build_reference_part("reference_video", "video_url", url))
-    for url in reference_audios or []:
-        content.append(_build_reference_part("reference_audio", "audio_url", url))
-
-    payload: Dict[str, Any] = {"model": model, "content": content}
-
-    # 这些字段官方 API 接受顶层参数；不存在的字段服务端会忽略
-    if ratio:
-        payload["ratio"] = ratio
-    if duration is not None:
-        try:
-            payload["duration"] = int(duration)
-        except (TypeError, ValueError):
-            payload["duration"] = duration
-    if resolution:
-        payload["resolution"] = resolution
-    if seed is not None:
-        payload["seed"] = seed
-    if fps is not None:
-        payload["fps"] = fps
-    if generate_audio is not None:
-        payload["generate_audio"] = generate_audio
-    if watermark is not None:
-        payload["watermark"] = watermark
-    return payload
-
-
-def _normalize_image_inputs(
-    image_url: Optional[str],
-    image_base64: Optional[str],
-    image_path: Optional[str],
-    image_mime: Optional[str],
-) -> Optional[str]:
-    if not any((image_url, image_base64, image_path)):
-        return None
-    return _resolve_image_to_url(image_url, image_base64, image_path, image_mime)
-
 
 @mcp.tool()
 def text_to_video(
@@ -406,7 +443,11 @@ def text_to_video(
     poll_interval: int = DEFAULT_TASK_POLL_INTERVAL,
     poll_max_retries: int = DEFAULT_TASK_POLL_MAX_RETRIES,
 ) -> Dict[str, Any]:
-    """文生视频（同步版）：创建任务并阻塞轮询直到完成。"""
+    """文生视频（同步版）：创建任务并阻塞轮询直到完成。
+
+    长视频或网络较慢时建议改用 ``create_video_task`` + ``get_video_task``，
+    避免 MCP 客户端 RPC 超时。默认轮询 5 分钟（60 * 5s）。
+    """
     try:
         effective_model = _resolve_model(model, DEFAULT_TEXT_TO_VIDEO_MODEL)
         payload = _build_video_payload(
@@ -427,17 +468,9 @@ def text_to_video(
             reference_videos=reference_videos,
             reference_audios=reference_audios,
         )
-        created = _create_video_task(payload)
-        if not created.get("_ok"):
-            return {
-                "success": False,
-                "error": f"创建任务失败: {created.get('error')}",
-            }
-        task_id = created.get("id")
-        if not task_id:
-            return {"success": False, "error": "未获取到任务ID"}
-        return _wait_video_task(task_id, poll_interval, poll_max_retries)
+        return _run_sync_video_task(payload, poll_interval, poll_max_retries)
     except Exception as e:  # noqa: BLE001
+        logger.exception("text_to_video failed")
         return {"success": False, "error": f"生成视频时出错: {e}"}
 
 
@@ -451,6 +484,7 @@ def image_to_video(
     last_frame_url: Optional[str] = None,
     last_frame_base64: Optional[str] = None,
     last_frame_path: Optional[str] = None,
+    last_frame_mime: Optional[str] = None,
     duration: Optional[Union[int, str]] = 5,
     ratio: Optional[str] = "16:9",
     model: Optional[str] = None,
@@ -467,7 +501,10 @@ def image_to_video(
     poll_interval: int = DEFAULT_TASK_POLL_INTERVAL,
     poll_max_retries: int = DEFAULT_TASK_POLL_MAX_RETRIES,
 ) -> Dict[str, Any]:
-    """图生视频（同步版）：支持 url / base64 / 本地路径 三选一，可附首尾帧、参考图/视频/音频。"""
+    """图生视频（同步版）：支持 url / base64 / 本地路径 三选一，可附首尾帧。
+
+    ``last_frame_mime`` 与 ``image_mime`` 独立，避免首尾帧 MIME 互相污染。
+    """
     try:
         first_frame = _normalize_image_inputs(
             image_url, image_base64, image_path, image_mime
@@ -478,7 +515,7 @@ def image_to_video(
                 "error": "至少需提供 image_url / image_base64 / image_path 之一",
             }
         last_frame = _normalize_image_inputs(
-            last_frame_url, last_frame_base64, last_frame_path, image_mime
+            last_frame_url, last_frame_base64, last_frame_path, last_frame_mime
         )
 
         effective_model = _resolve_model(model, DEFAULT_IMAGE_TO_VIDEO_MODEL)
@@ -500,21 +537,15 @@ def image_to_video(
             reference_videos=reference_videos,
             reference_audios=reference_audios,
         )
-        created = _create_video_task(payload)
-        if not created.get("_ok"):
-            return {
-                "success": False,
-                "error": f"创建任务失败: {created.get('error')}",
-            }
-        task_id = created.get("id")
-        if not task_id:
-            return {"success": False, "error": "未获取到任务ID"}
-        return _wait_video_task(task_id, poll_interval, poll_max_retries)
+        return _run_sync_video_task(payload, poll_interval, poll_max_retries)
     except Exception as e:  # noqa: BLE001
+        logger.exception("image_to_video failed")
         return {"success": False, "error": f"生成视频时出错: {e}"}
 
 
-# ---------- async task primitives ----------
+# ---------------------------------------------------------------------------
+# tools - async task primitives
+# ---------------------------------------------------------------------------
 
 @mcp.tool()
 def create_video_task(
@@ -527,6 +558,7 @@ def create_video_task(
     last_frame_url: Optional[str] = None,
     last_frame_base64: Optional[str] = None,
     last_frame_path: Optional[str] = None,
+    last_frame_mime: Optional[str] = None,
     duration: Optional[Union[int, str]] = None,
     ratio: Optional[str] = None,
     resolution: Optional[str] = None,
@@ -546,9 +578,8 @@ def create_video_task(
             image_url, image_base64, image_path, image_mime
         )
         last_frame = _normalize_image_inputs(
-            last_frame_url, last_frame_base64, last_frame_path, image_mime
+            last_frame_url, last_frame_base64, last_frame_path, last_frame_mime
         )
-        # 没有首帧也算文生视频任务，不强制
         default_model = (
             DEFAULT_IMAGE_TO_VIDEO_MODEL if first_frame else DEFAULT_TEXT_TO_VIDEO_MODEL
         )
@@ -571,26 +602,34 @@ def create_video_task(
             reference_videos=reference_videos,
             reference_audios=reference_audios,
         )
-        result = _create_video_task(payload)
+        result = _create_video_task_raw(payload)
         if not result.get("_ok"):
             return {
                 "success": False,
                 "error": f"创建任务失败: {result.get('error')}",
             }
+        task_id = _extract_task_id(result)
+        if not task_id:
+            return {
+                "success": False,
+                "error": "未获取到任务ID",
+                "raw": _strip_meta(result),
+            }
         return {
             "success": True,
-            "task_id": result.get("id"),
+            "task_id": task_id,
             "model": effective_model,
-            "raw": {k: v for k, v in result.items() if not k.startswith("_")},
+            "raw": _strip_meta(result),
         }
     except Exception as e:  # noqa: BLE001
+        logger.exception("create_video_task failed")
         return {"success": False, "error": f"创建任务出错: {e}"}
 
 
 @mcp.tool()
 def get_video_task(task_id: str) -> Dict[str, Any]:
     """查询视频任务状态。"""
-    data = _get_video_task(task_id)
+    data = _get_video_task_raw(task_id)
     if not data.get("_ok"):
         return {"success": False, "error": data.get("error"), "task_id": task_id}
     return {
@@ -599,7 +638,7 @@ def get_video_task(task_id: str) -> Dict[str, Any]:
         "status": data.get("status"),
         "content": data.get("content"),
         "usage": data.get("usage"),
-        "raw": {k: v for k, v in data.items() if not k.startswith("_")},
+        "raw": _strip_meta(data),
     }
 
 
@@ -622,19 +661,28 @@ def list_video_tasks(
     data = _doubao_request("GET", "/contents/generations/tasks", params=params)
     if not data.get("_ok"):
         return {"success": False, "error": data.get("error")}
-    return {
-        "success": True,
-        "raw": {k: v for k, v in data.items() if not k.startswith("_")},
-    }
+    return {"success": True, "raw": _strip_meta(data)}
 
 
 @mcp.tool()
 def cancel_video_task(task_id: str) -> Dict[str, Any]:
-    """取消或删除视频任务。"""
-    data = _doubao_request("DELETE", f"/contents/generations/tasks/{task_id}")
-    if not data.get("_ok"):
-        return {"success": False, "task_id": task_id, "error": data.get("error")}
-    return {"success": True, "task_id": task_id}
+    """取消或删除视频任务。先尝试 POST /cancel，回退到 DELETE。"""
+    cancel = _doubao_request(
+        "POST", f"/contents/generations/tasks/{task_id}/cancel"
+    )
+    if cancel.get("_ok"):
+        return {"success": True, "task_id": task_id, "method": "cancel"}
+
+    # 回退：部分网关 / 已完成任务只接受 DELETE
+    deleted = _doubao_request("DELETE", f"/contents/generations/tasks/{task_id}")
+    if deleted.get("_ok"):
+        return {"success": True, "task_id": task_id, "method": "delete"}
+
+    return {
+        "success": False,
+        "task_id": task_id,
+        "error": deleted.get("error") or cancel.get("error"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -646,17 +694,20 @@ def encode_image_to_base64(image_path: str) -> Dict[str, Any]:
     """将本地图片文件编码为 base64 字符串。"""
     try:
         path = Path(os.path.expanduser(image_path)).resolve()
+        if not path.is_file():
+            return {"success": False, "error": f"图片不存在: {path}"}
         with path.open("rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-            mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-            return {
-                "success": True,
-                "base64_string": encoded_string,
-                "mime_type": mime,
-                "data_url": f"data:{mime};base64,{encoded_string}",
-                "message": "图片编码成功",
-            }
+        mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+        return {
+            "success": True,
+            "base64_string": encoded_string,
+            "mime_type": mime,
+            "data_url": f"data:{mime};base64,{encoded_string}",
+            "message": "图片编码成功",
+        }
     except Exception as e:  # noqa: BLE001
+        logger.exception("encode_image_to_base64 failed")
         return {"success": False, "error": f"编码图片失败: {e}"}
 
 
@@ -690,6 +741,8 @@ def get_server_settings() -> str:
     settings = {
         "base_url": get_base_url(),
         "api_key_set": bool(get_api_key()),
+        "default_poll_interval_s": DEFAULT_TASK_POLL_INTERVAL,
+        "default_sync_max_retries": DEFAULT_TASK_POLL_MAX_RETRIES,
         "supported_image_sizes": [
             "512x512",
             "768x768",

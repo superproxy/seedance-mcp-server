@@ -1,9 +1,9 @@
 [project]
 name = "seedance-mcp-server"
-version = "2.2.2"
+version = "2.3.0"
 description = "Volcengine Doubao MCP server (Seedance fork): text-to-image, text-to-video and image-to-video tools, with configurable DOUBAO_BASE_URL."
 authors = [
-    {name = "sharpcoder",email = "harpcoder@qq.com"}
+    {name = "sharpcoder",email = "sharpcoder@qq.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.13"
