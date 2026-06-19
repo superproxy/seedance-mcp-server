@@ -22,8 +22,25 @@
 | 工具 | 内置默认模型 |
 | --- | --- |
 | `text_to_image` | `doubao-seedream-3-0-t2i-250415` |
-| `image_to_video` | `doubao-seedance-1-0-lite-i2v-250428` |
-| `text_to_video` | `doubao-seedance-1-0-lite-t2v-250428` |
+| `image_to_video` | `doubao-seedance-2-0-fast-260128` |
+| `text_to_video` | `doubao-seedance-2-0-fast-260128` |
+
+## 工具一览
+
+`seedance-mcp-server` 暴露的 MCP 工具：
+
+| 工具 | 类型 | 说明 |
+| --- | --- | --- |
+| `text_to_image` | 同步 | 文生图，封装 `/images/generations`，支持 `seed / guidance_scale / watermark / response_format / n` |
+| `text_to_video` | 同步（轮询直到完成） | 文生视频，支持参考图/视频/音频、`generate_audio / watermark / seed / resolution / fps / camerafixed / negative_prompt` |
+| `image_to_video` | 同步（轮询直到完成） | 图生视频，首帧 + 可选尾帧，支持 url / base64 / 本地路径三选一；同样支持参考素材与全部高级参数 |
+| `create_video_task` | 异步 | 仅创建任务返回 `task_id`，不阻塞；同时覆盖文生视频与图生视频 |
+| `get_video_task` | 异步 | 查询单个任务状态及输出 |
+| `list_video_tasks` | 异步 | 分页查询任务列表，支持按 status / model / task_ids 过滤 |
+| `cancel_video_task` | 异步 | 取消或删除任务 |
+| `encode_image_to_base64` | 工具 | 把本地图片编码成 base64，便于 `image_to_video` 使用 |
+
+视频任务相关工具调用 `POST/GET/DELETE /contents/generations/tasks` 端点；同步版默认轮询上限为 30 分钟（`poll_interval=5s`，`poll_max_retries=360`），可在调用时覆盖。
 
 ## 本地以 uvx 运行
 
