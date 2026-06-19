@@ -1,4 +1,4 @@
-# doubao_mcp_server.py
+# seedance_mcp_server.py
 import time
 import base64
 import requests
@@ -12,16 +12,35 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("AI Generation Server")
 
 # 全局配置
-API_KEY = None
-BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+
+DEFAULT_TEXT_TO_IMAGE_MODEL = "doubao-seedance-2-0-fast-260128"
+DEFAULT_IMAGE_TO_VIDEO_MODEL = "doubao-seedance-2-0-fast-260128"
+DEFAULT_TEXT_TO_VIDEO_MODEL = "doubao-seedance-2-0-fast-260128"
+
+
+def get_api_key() -> Optional[str]:
+    return os.getenv("DOUBAO_API_KEY")
+
+
+def get_base_url() -> str:
+    return os.getenv("DOUBAO_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+
+
+def _resolve_model(explicit: Optional[str], default: str) -> str:
+    if explicit:
+        return explicit
+    env_value = os.getenv("DOUBAO_MODEL")
+    if env_value:
+        return env_value
+    return default
 
 def initialize_client():
-    # 优先从环境变量加载 API_KEY
-    API_KEY = os.getenv("DOUBAO_API_KEY")
     """初始化OpenAI客户端"""
-    if not API_KEY:
+    api_key = get_api_key()
+    if not api_key:
         raise ValueError("API key is required")
-    return OpenAI(api_key=API_KEY, base_url=BASE_URL)
+    return OpenAI(api_key=api_key, base_url=get_base_url())
 
 # @mcp.tool()
 # def set_api_key(api_key: str) -> str:
@@ -32,26 +51,28 @@ def initialize_client():
 
 @mcp.tool()
 def text_to_image(
-    prompt: str, 
-    size: str = "1024x1024", 
-    model: str = "doubao-seedream-3-0-t2i-250415",
+    prompt: str,
+    size: str = "1024x1024",
+    model: Optional[str] = None,
    # watermark: bool = False
 ) -> Dict[str, Any]:
     """
     文生图功能 - 根据文本描述生成图片
-    
+
     Args:
         prompt: 图片描述提示词
         size: 图片尺寸，格式为"宽x高"，如"1024x1024"
-        model: 使用的模型名称
+        model: 使用的模型名称。不传时按环境变量 DOUBAO_MODEL，
+            未设置则使用内置默认值 doubao-seedance-2-0-fast-260128。
     Returns:
         包含图片URL或错误信息的字典
     """
     try:
         client = initialize_client()
-        
+        effective_model = _resolve_model(model, DEFAULT_TEXT_TO_IMAGE_MODEL)
+
         params = {
-            "model": model,
+            "model": effective_model,
             "prompt": prompt,
             "size": size,
             "response_format": "url",
@@ -84,22 +105,30 @@ def image_to_video(
     image_base64: str,
     duration: str = "5",
     ratio: str = "16:9",
-    model: str = "doubao-seedance-1-0-lite-i2v-250428"
+    model: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     图生视频功能 - 根据图片和文本描述生成视频
-    
+
     Args:
         prompt: 视频描述提示词
         image_base64: 图片的base64编码字符串
         duration: 视频时长（秒）
         ratio: 视频比例，如"16:9"
-        model: 使用的模型名称
-    
+        model: 使用的模型名称。不传时按环境变量 DOUBAO_MODEL，
+            未设置则使用内置默认值 doubao-seedance-2-0-fast-260128。
+
     Returns:
         包含视频URL或错误信息的字典
     """
     try:
+        api_key = get_api_key()
+        base_url = get_base_url()
+        if not api_key:
+            raise ValueError("API key is required")
+
+        effective_model = _resolve_model(model, DEFAULT_IMAGE_TO_VIDEO_MODEL)
+
         # 构造图片数据URL
         image_data_url = f"data:image/jpeg;base64,{image_base64}"
         
@@ -111,7 +140,7 @@ def image_to_video(
         
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_KEY}"
+            "Authorization": f"Bearer {api_key}"
         }
         
         # 构造请求内容
@@ -121,13 +150,13 @@ def image_to_video(
         ]
         
         request_data = {
-            "model": model,
+            "model": effective_model,
             "content": content
         }
         
         # 创建视频生成任务
         response = requests.post(
-            f"{BASE_URL}/contents/generations/tasks",
+            f"{base_url}/contents/generations/tasks",
             headers=headers,
             json=request_data
         )
@@ -151,7 +180,7 @@ def image_to_video(
             time.sleep(5)
             
             task_resp = requests.get(
-                f"{BASE_URL}/contents/generations/tasks/{task_id}",
+                f"{base_url}/contents/generations/tasks/{task_id}",
                 headers=headers
             )
             
@@ -194,21 +223,29 @@ def text_to_video(
     prompt: str,
     duration: str = "5",
     ratio: str = "16:9",
-    model: str = "doubao-seedance-1-0-lite-t2v-250428"
+    model: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     文生视频功能 - 根据文本描述生成视频
-    
+
     Args:
         prompt: 视频描述提示词
         duration: 视频时长（秒）
         ratio: 视频比例，如"16:9"
-        model: 使用的模型名称
-    
+        model: 使用的模型名称。不传时按环境变量 DOUBAO_MODEL，
+            未设置则使用内置默认值 doubao-seedance-1-0-lite-t2v-250428。
+
     Returns:
         包含视频URL或错误信息的字典
     """
     try:
+        api_key = get_api_key()
+        base_url = get_base_url()
+        if not api_key:
+            raise ValueError("API key is required")
+
+        effective_model = _resolve_model(model, DEFAULT_TEXT_TO_VIDEO_MODEL)
+
         # 自动添加参数到提示词
         if ratio and "--ratio" not in prompt:
             prompt += f" --ratio {ratio}"
@@ -217,17 +254,17 @@ def text_to_video(
         
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_KEY}"
+            "Authorization": f"Bearer {api_key}"
         }
         
         request_data = {
-            "model": model,
+            "model": effective_model,
             "content": [{"type": "text", "text": prompt}]
         }
         
         # 创建视频生成任务
         response = requests.post(
-            f"{BASE_URL}/contents/generations/tasks",
+            f"{base_url}/contents/generations/tasks",
             headers=headers,
             json=request_data
         )
@@ -251,7 +288,7 @@ def text_to_video(
             time.sleep(5)
             
             task_resp = requests.get(
-                f"{BASE_URL}/contents/generations/tasks/{task_id}",
+                f"{base_url}/contents/generations/tasks/{task_id}",
                 headers=headers
             )
             
@@ -316,26 +353,31 @@ def encode_image_to_base64(image_path: str) -> Dict[str, Any]:
 
 @mcp.resource("config://models")
 def get_available_models() -> str:
-    """获取可用的AI模型列表"""
+    """获取当前生效的默认模型与可选模型列表"""
     models = {
-        "text_to_image": [
-            "doubao-seedream-3-0-t2i-250415"
-        ],
-        "image_to_video": [
-            "doubao-seedance-1-0-lite-i2v-250428"
-        ],
-        "text_to_video": [
-            "doubao-seedance-1-0-lite-t2v-250428"
-        ]
+        "env": "DOUBAO_MODEL",
+        "env_value": os.getenv("DOUBAO_MODEL"),
+        "text_to_image": {
+            "default": _resolve_model(None, DEFAULT_TEXT_TO_IMAGE_MODEL),
+            "builtin_default": DEFAULT_TEXT_TO_IMAGE_MODEL,
+        },
+        "image_to_video": {
+            "default": _resolve_model(None, DEFAULT_IMAGE_TO_VIDEO_MODEL),
+            "builtin_default": DEFAULT_IMAGE_TO_VIDEO_MODEL,
+        },
+        "text_to_video": {
+            "default": _resolve_model(None, DEFAULT_TEXT_TO_VIDEO_MODEL),
+            "builtin_default": DEFAULT_TEXT_TO_VIDEO_MODEL,
+        },
     }
-    return f"可用模型列表: {models}"
+    return f"模型配置: {models}"
 
 @mcp.resource("config://settings")
 def get_server_settings() -> str:
     """获取服务器配置信息"""
     settings = {
-        "base_url": BASE_URL,
-        "api_key_set": bool(API_KEY),
+        "base_url": get_base_url(),
+        "api_key_set": bool(get_api_key()),
         "supported_image_sizes": ["512x512", "768x768", "1024x1024", "1024x1792", "1792x1024"],
         "supported_video_ratios": ["16:9", "9:16", "1:1"],
         "max_video_duration": "10s"
