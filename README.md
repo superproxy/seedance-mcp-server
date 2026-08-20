@@ -2,7 +2,7 @@
 
 火山引擎豆包 MCP Server：文生图、文生视频、图生视频，以及视频任务的异步管理。基于 [`superproxy/doubao_mcp_server`](https://github.com/superproxy/doubao_mcp_server) 修改而来，支持通过环境变量配置 `DOUBAO_BASE_URL` 与默认模型。代码模块名为 `seedance_mcp_server`，PyPI 包名 / CLI 入口为 `seedance-mcp-server`。
 
-当前版本：**v2.3.0**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
+当前版本：**v2.3.1**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
 
 ## 环境变量
 
@@ -178,6 +178,8 @@ UV_INDEX_URL=https://pypi.org/simple uvx --refresh seedance-mcp-server
 
 ## 版本历史
 
+- **2.3.1**
+  - 修复 `mcp` 依赖未设上限导致 fresh install 解析到 `mcp` 2.x 而启动崩溃（`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`）的问题：`mcp[cli]>=1.9.4` → `mcp[cli]>=1.9.4,<2`
 - **2.3.0**
   - 重构 `seedance_mcp_server.py`：`_doubao_request` 兜底网络异常与非 dict 响应；`_wait_video_task` 先查后等，避免无谓首次 sleep；`_extract_task_id` 兼容 `id` / `task_id` / `data.id`
   - 视频参数（`ratio` / `duration` / `resolution` / `seed` / `fps` / `camerafixed` / `generate_audio` / `watermark` / `negative_prompt`）统一改为顶层 JSON 字段，不再以 `--flag` 形式注入 prompt 文本
