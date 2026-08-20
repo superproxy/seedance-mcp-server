@@ -1,4 +1,4 @@
-"""Validate the published 2.3.1 package via uvx -> MCP stdio.
+"""Validate the published 2.4.0 package via uvx -> MCP stdio.
 
 Covers: list_tools, both resources, list_video_tasks, create_video_task,
 get_video_task, encode_image_to_base64, cancel_video_task on the just-created
@@ -49,7 +49,7 @@ def _section(name: str) -> None:
 async def main() -> int:
     server = StdioServerParameters(
         command="uvx",
-        args=["--refresh", "seedance-mcp-server==2.3.1"],
+        args=["--refresh", "seedance-mcp-server==2.4.0"],
         env={**os.environ, "UV_INDEX_URL": "https://pypi.org/simple"},
     )
 
@@ -63,9 +63,9 @@ async def main() -> int:
             names = [t.name for t in tools.tools]
             print("tools:", names)
             expected = {
-                "text_to_image", "text_to_video", "image_to_video",
-                "create_video_task", "get_video_task", "list_video_tasks",
-                "cancel_video_task", "encode_image_to_base64",
+                "text_to_image", "image_to_image", "text_to_video",
+                "image_to_video", "create_video_task", "get_video_task",
+                "list_video_tasks", "cancel_video_task", "encode_image_to_base64",
             }
             assert expected.issubset(set(names)), f"missing: {expected - set(names)}"
 

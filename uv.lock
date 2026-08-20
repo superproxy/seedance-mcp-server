@@ -734,7 +734,7 @@ wheels = [
 
 [[package]]
 name = "seedance-mcp-server"
-version = "2.3.1"
+version = "2.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },

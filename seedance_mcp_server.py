@@ -1,5 +1,5 @@
 # seedance_mcp_server.py
-"""Seedance MCP Server: text-to-image / text-to-video / image-to-video.
+"""Seedance MCP Server: text-to-image / image-to-image / text-to-video / image-to-video.
 
 All configuration is read on demand via ``get_api_key()`` / ``get_base_url()`` /
 ``_resolve_model()``. There are no module-level mutable globals on purpose so
@@ -28,11 +28,13 @@ mcp = FastMCP("AI Generation Server")
 
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 
-DEFAULT_TEXT_TO_IMAGE_MODEL = "doubao-seedream-3-0-t2i-250415"
+DEFAULT_TEXT_TO_IMAGE_MODEL = "doubao-seedream-5-0-pro-260628"
+DEFAULT_IMAGE_TO_IMAGE_MODEL = "doubao-seedream-5-0-pro-260628"
 DEFAULT_IMAGE_TO_VIDEO_MODEL = "doubao-seedance-2-0-fast-260128"
 DEFAULT_TEXT_TO_VIDEO_MODEL = "doubao-seedance-2-0-fast-260128"
 
 DEFAULT_HTTP_TIMEOUT = 60
+IMAGE_GENERATION_TIMEOUT = 180  # 图生图生成较慢，单独放宽
 DEFAULT_TASK_POLL_INTERVAL = 5
 DEFAULT_TASK_POLL_MAX_RETRIES = 60  # 5s * 60 = 5min, suitable for sync MCP calls
 ASYNC_TASK_POLL_MAX_RETRIES = 360   # 30min, exposed via param for power users
@@ -43,17 +45,37 @@ ASYNC_TASK_POLL_MAX_RETRIES = 360   # 30min, exposed via param for power users
 # ---------------------------------------------------------------------------
 
 def get_api_key() -> Optional[str]:
-    return os.getenv("DOUBAO_API_KEY")
+    return os.getenv("ARK_KEY") or os.getenv("DOUBAO_API_KEY")
 
 
 def get_base_url() -> str:
-    return os.getenv("DOUBAO_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+    return (
+        os.getenv("ARK_BASE_URL")
+        or os.getenv("DOUBAO_BASE_URL")
+        or DEFAULT_BASE_URL
+    ).rstrip("/")
 
 
 def _resolve_model(explicit: Optional[str], default: str) -> str:
     if explicit:
         return explicit
-    env_value = os.getenv("DOUBAO_MODEL")
+    env_value = os.getenv("ARK_VIDEO_MODEL") or os.getenv("DOUBAO_MODEL")
+    if env_value:
+        return env_value
+    return default
+
+
+def _resolve_image_model(explicit: Optional[str], default: str) -> str:
+    """Image tools resolve from their own env var (ARK_IMG_MODEL).
+
+    They intentionally skip the video model env (ARK_VIDEO_MODEL): that one
+    may hold a video model (e.g. doubao-seedance-2-5-260628), which
+    /images/generations rejects. ``ARK_IMG_MODEL`` lets users override the
+    builtin image default without disturbing the video model.
+    """
+    if explicit:
+        return explicit
+    env_value = os.getenv("ARK_IMG_MODEL") or os.getenv("DOUBAO_IMAGE_MODEL")
     if env_value:
         return env_value
     return default
@@ -379,7 +401,7 @@ def text_to_image(
     """
     try:
         client = initialize_client()
-        effective_model = _resolve_model(model, DEFAULT_TEXT_TO_IMAGE_MODEL)
+        effective_model = _resolve_image_model(model, DEFAULT_TEXT_TO_IMAGE_MODEL)
 
         params: Dict[str, Any] = {
             "model": effective_model,
@@ -417,6 +439,99 @@ def text_to_image(
         }
     except Exception as e:  # noqa: BLE001
         logger.exception("text_to_image failed")
+        return {"success": False, "error": f"生成图片时出错: {e}"}
+
+
+@mcp.tool()
+def image_to_image(
+    prompt: str,
+    image_url: Optional[str] = None,
+    image_base64: Optional[str] = None,
+    image_path: Optional[str] = None,
+    image_mime: Optional[str] = None,
+    size: str = "1024x1024",
+    model: Optional[str] = None,
+    seed: Optional[int] = None,
+    guidance_scale: Optional[float] = None,
+    negative_prompt: Optional[str] = None,
+    watermark: bool = False,
+    response_format: str = "url",
+    n: int = 1,
+) -> Dict[str, Any]:
+    """图生图：基于一张参考图生成新图片（调用 /images/generations 的 image 参数）。
+
+    Args:
+        prompt: 对生成结果的描述提示词
+        image_url: 参考图 URL
+        image_base64: 参考图 base64（可带 data: URI 前缀）
+        image_path: 本地参考图路径
+        image_mime: image_base64/image_path 的 MIME 类型，默认按扩展名推断
+        size: 图片尺寸，如 "1024x1024"
+        model: 模型 id；默认按 DOUBAO_MODEL 或内置 doubao-seedream-5-0-pro-260628
+        seed: 随机种子，便于复现
+        guidance_scale: 提示词强度 (1~10)，越大越贴合 prompt
+        negative_prompt: 负向提示词，描述不希望出现的内容
+        watermark: 是否添加水印
+        response_format: "url" 或 "b64_json"
+        n: 生成张数
+    """
+    try:
+        reference = _normalize_image_inputs(
+            image_url, image_base64, image_path, image_mime
+        )
+        if not reference:
+            return {
+                "success": False,
+                "error": "图生图必须提供 image_url / image_base64 / image_path 之一",
+            }
+
+        effective_model = _resolve_image_model(model, DEFAULT_IMAGE_TO_IMAGE_MODEL)
+
+        payload: Dict[str, Any] = {
+            "model": effective_model,
+            "prompt": prompt,
+            "image": reference,
+            "size": size,
+            "response_format": response_format,
+            "n": n,
+        }
+        if seed is not None:
+            payload["seed"] = seed
+        if guidance_scale is not None:
+            payload["guidance_scale"] = guidance_scale
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if watermark:
+            payload["watermark"] = True
+
+        resp = _doubao_request(
+            "POST",
+            "/images/generations",
+            json_body=payload,
+            timeout=IMAGE_GENERATION_TIMEOUT,
+        )
+        if not resp.get("_ok"):
+            return {"success": False, "error": resp.get("error")}
+
+        data = resp.get("data") or []
+        images: List[Dict[str, Any]] = [
+            {"url": item.get("url"), "b64_json": item.get("b64_json")}
+            for item in data
+            if isinstance(item, dict)
+        ]
+        if not images:
+            return {"success": False, "error": "未返回图片数据"}
+        primary = images[0]
+        return {
+            "success": True,
+            "model": effective_model,
+            "image_url": primary.get("url"),
+            "image_b64": primary.get("b64_json"),
+            "images": images,
+            "message": "图片生成成功",
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("image_to_image failed")
         return {"success": False, "error": f"生成图片时出错: {e}"}
 
 
@@ -718,11 +833,18 @@ def encode_image_to_base64(image_path: str) -> Dict[str, Any]:
 @mcp.resource("config://models")
 def get_available_models() -> str:
     models = {
-        "env": "DOUBAO_MODEL",
-        "env_value": os.getenv("DOUBAO_MODEL"),
+        "env": "ARK_VIDEO_MODEL",
+        "env_value": os.getenv("ARK_VIDEO_MODEL") or os.getenv("DOUBAO_MODEL"),
+        "image_env": "ARK_IMG_MODEL",
+        "image_env_value": os.getenv("ARK_IMG_MODEL")
+        or os.getenv("DOUBAO_IMAGE_MODEL"),
         "text_to_image": {
-            "default": _resolve_model(None, DEFAULT_TEXT_TO_IMAGE_MODEL),
+            "default": _resolve_image_model(None, DEFAULT_TEXT_TO_IMAGE_MODEL),
             "builtin_default": DEFAULT_TEXT_TO_IMAGE_MODEL,
+        },
+        "image_to_image": {
+            "default": _resolve_image_model(None, DEFAULT_IMAGE_TO_IMAGE_MODEL),
+            "builtin_default": DEFAULT_IMAGE_TO_IMAGE_MODEL,
         },
         "image_to_video": {
             "default": _resolve_model(None, DEFAULT_IMAGE_TO_VIDEO_MODEL),
@@ -763,6 +885,7 @@ def get_server_settings() -> str:
         "supported_video_durations_s": [3, 5, 10, 11, 12, 15],
         "tools": [
             "text_to_image",
+            "image_to_image",
             "text_to_video",
             "image_to_video",
             "create_video_task",
