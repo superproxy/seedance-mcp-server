@@ -13,7 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("DOUBAO_API_KEY", "test-key")
+os.environ.setdefault("ARK_API_KEY", "test-key")
 
 import seedance_mcp_server as srv  # noqa: E402
 
@@ -23,18 +23,30 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(srv._resolve_model("a", "b"), "a")
 
     def test_resolve_model_env(self):
-        with mock.patch.dict(os.environ, {"DOUBAO_MODEL": "envm"}, clear=False):
+        with mock.patch.dict(os.environ, {"ARK_VIDEO_MODEL": "envm"}, clear=False):
             self.assertEqual(srv._resolve_model(None, "default"), "envm")
 
     def test_resolve_model_default(self):
-        env = {k: v for k, v in os.environ.items() if k != "DOUBAO_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k != "ARK_VIDEO_MODEL"}
         with mock.patch.dict(os.environ, env, clear=True):
-            os.environ["DOUBAO_API_KEY"] = "test-key"
+            os.environ["ARK_API_KEY"] = "test-key"
             self.assertEqual(srv._resolve_model(None, "fallback"), "fallback")
 
     def test_base_url_strips_trailing_slash(self):
-        with mock.patch.dict(os.environ, {"DOUBAO_BASE_URL": "https://x/api/v3/"}):
+        with mock.patch.dict(os.environ, {"ARK_BASE_URL": "https://x/api/v3/"}):
             self.assertEqual(srv.get_base_url(), "https://x/api/v3")
+
+    def test_api_key_env_recognized(self):
+        with mock.patch.dict(os.environ, {"ARK_API_KEY": "ark-test"}, clear=True):
+            self.assertEqual(srv.get_api_key(), "ark-test")
+
+    def test_legacy_vars_not_recognized(self):
+        with mock.patch.dict(
+            os.environ,
+            {"ARK_KEY": "old", "DOUBAO_API_KEY": "older"},
+            clear=True,
+        ):
+            self.assertIsNone(srv.get_api_key())
 
     def test_require_api_key_missing(self):
         with mock.patch.dict(os.environ, {}, clear=True):

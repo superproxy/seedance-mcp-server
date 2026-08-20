@@ -45,21 +45,17 @@ ASYNC_TASK_POLL_MAX_RETRIES = 360   # 30min, exposed via param for power users
 # ---------------------------------------------------------------------------
 
 def get_api_key() -> Optional[str]:
-    return os.getenv("ARK_KEY") or os.getenv("DOUBAO_API_KEY")
+    return os.getenv("ARK_API_KEY")
 
 
 def get_base_url() -> str:
-    return (
-        os.getenv("ARK_BASE_URL")
-        or os.getenv("DOUBAO_BASE_URL")
-        or DEFAULT_BASE_URL
-    ).rstrip("/")
+    return (os.getenv("ARK_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
 
 
 def _resolve_model(explicit: Optional[str], default: str) -> str:
     if explicit:
         return explicit
-    env_value = os.getenv("ARK_VIDEO_MODEL") or os.getenv("DOUBAO_MODEL")
+    env_value = os.getenv("ARK_VIDEO_MODEL")
     if env_value:
         return env_value
     return default
@@ -75,7 +71,7 @@ def _resolve_image_model(explicit: Optional[str], default: str) -> str:
     """
     if explicit:
         return explicit
-    env_value = os.getenv("ARK_IMG_MODEL") or os.getenv("DOUBAO_IMAGE_MODEL")
+    env_value = os.getenv("ARK_IMG_MODEL")
     if env_value:
         return env_value
     return default
@@ -84,7 +80,7 @@ def _resolve_image_model(explicit: Optional[str], default: str) -> str:
 def _require_api_key() -> str:
     api_key = get_api_key()
     if not api_key:
-        raise ValueError("API key is required (set DOUBAO_API_KEY)")
+        raise ValueError("API key is required (set ARK_API_KEY)")
     return api_key
 
 
@@ -392,7 +388,7 @@ def text_to_image(
     Args:
         prompt: 图片描述提示词
         size: 图片尺寸，如 "1024x1024"
-        model: 模型 id；默认按 DOUBAO_MODEL 或内置 doubao-seedream-3-0-t2i-250415
+        model: 模型 id；默认按 ARK_IMG_MODEL 或内置 doubao-seedream-5-0-pro-260628
         seed: 随机种子，便于复现
         guidance_scale: 提示词强度 (1~10)，越大越贴合 prompt
         watermark: 是否添加水印
@@ -467,7 +463,7 @@ def image_to_image(
         image_path: 本地参考图路径
         image_mime: image_base64/image_path 的 MIME 类型，默认按扩展名推断
         size: 图片尺寸，如 "1024x1024"
-        model: 模型 id；默认按 DOUBAO_MODEL 或内置 doubao-seedream-5-0-pro-260628
+        model: 模型 id；默认按 ARK_IMG_MODEL 或内置 doubao-seedream-5-0-pro-260628
         seed: 随机种子，便于复现
         guidance_scale: 提示词强度 (1~10)，越大越贴合 prompt
         negative_prompt: 负向提示词，描述不希望出现的内容
@@ -601,7 +597,7 @@ def image_to_video(
     last_frame_path: Optional[str] = None,
     last_frame_mime: Optional[str] = None,
     duration: Optional[Union[int, str]] = 5,
-    ratio: Optional[str] = "16:9",
+    ratio: Optional[str] = "adaptive",
     model: Optional[str] = None,
     resolution: Optional[str] = None,
     seed: Optional[int] = None,
@@ -834,10 +830,9 @@ def encode_image_to_base64(image_path: str) -> Dict[str, Any]:
 def get_available_models() -> str:
     models = {
         "env": "ARK_VIDEO_MODEL",
-        "env_value": os.getenv("ARK_VIDEO_MODEL") or os.getenv("DOUBAO_MODEL"),
+        "env_value": os.getenv("ARK_VIDEO_MODEL"),
         "image_env": "ARK_IMG_MODEL",
-        "image_env_value": os.getenv("ARK_IMG_MODEL")
-        or os.getenv("DOUBAO_IMAGE_MODEL"),
+        "image_env_value": os.getenv("ARK_IMG_MODEL"),
         "text_to_image": {
             "default": _resolve_image_model(None, DEFAULT_TEXT_TO_IMAGE_MODEL),
             "builtin_default": DEFAULT_TEXT_TO_IMAGE_MODEL,

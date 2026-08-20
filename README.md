@@ -2,18 +2,18 @@
 
 火山引擎豆包 MCP Server：文生图、图生图、文生视频、图生视频，以及视频任务的异步管理。基于 [`superproxy/doubao_mcp_server`](https://github.com/superproxy/doubao_mcp_server) 修改而来，支持通过环境变量配置 `ARK_BASE_URL` 与图片/视频模型。代码模块名为 `seedance_mcp_server`，PyPI 包名 / CLI 入口为 `seedance-mcp-server`。
 
-当前版本：**v2.4.0**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
+当前版本：**v3.0.0**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
 
 ## 环境变量
 
 | 名称 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `ARK_KEY` | 是 | - | 火山引擎方舟 API Key，未设置时调用任何工具都会报 `API key is required` |
+| `ARK_API_KEY` | 是 | - | 火山引擎方舟 API Key，未设置时调用任何工具都会报 `API key is required` |
 | `ARK_BASE_URL` | 否 | `https://ark.cn-beijing.volces.com/api/v3` | 方舟 API 网关地址，用于切换区域、私有网关或自建代理；末尾 `/` 会被自动去掉 |
 | `ARK_VIDEO_MODEL` | 否 | 各视频工具内置默认模型 | 统一覆盖视频工具的默认模型；调用时未传 `model` 参数才生效 |
 | `ARK_IMG_MODEL` | 否 | `doubao-seedream-5-0-pro-260628` | 统一覆盖图片工具（文生图/图生图）的默认模型 |
 
-旧的 `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` / `DOUBAO_MODEL` / `DOUBAO_IMAGE_MODEL` 仍然识别，作为向后兼容回退；新配置请使用 `ARK_*`。
+旧的 `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` / `DOUBAO_MODEL` / `DOUBAO_IMAGE_MODEL` 以及 `ARK_KEY` 已不再识别，请统一使用 `ARK_API_KEY` 等 `ARK_*` 变量。
 
 `ARK_BASE_URL` 同时作用于：
 
@@ -73,7 +73,7 @@
 | `reference_videos` | list[str] | 参考视频 URL 列表 |
 | `reference_audios` | list[str] | 参考音频 URL 列表 |
 
-`image_to_video` 额外提供 `last_frame_url / last_frame_base64 / last_frame_path` 用于尾帧；`image_mime` 与 `last_frame_mime` 各自独立，避免首尾帧 MIME 互相污染。
+`image_to_video` 额外提供 `last_frame_url / last_frame_base64 / last_frame_path` 用于尾帧；`image_mime` 与 `last_frame_mime` 各自独立，避免首尾帧 MIME 互相污染。首帧视频的 `ratio` 必须为 `adaptive`（跟随首帧尺寸），服务端默认即为 `adaptive`，请勿显式传 `16:9` 等固定比例，否则会报 `InvalidParameter.TaskTypeConstraint`。
 
 ### 调用示例
 
@@ -136,13 +136,13 @@
 跑已发布版本：
 
 ```bash
-ARK_KEY=ark-xxx uvx seedance-mcp-server
+ARK_API_KEY=ark-xxx uvx seedance-mcp-server
 ```
 
 跑当前工作区源码：
 
 ```bash
-ARK_KEY=ark-xxx \
+ARK_API_KEY=ark-xxx \
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3 \
 uvx --from . seedance-mcp-server
 ```
@@ -164,7 +164,7 @@ UV_INDEX_URL=https://pypi.org/simple uvx --refresh seedance-mcp-server
       "command": "uvx",
       "args": ["seedance-mcp-server"],
       "env": {
-        "ARK_KEY": "ark-xxx",
+        "ARK_API_KEY": "ark-xxx",
         "ARK_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
         "ARK_IMG_MODEL": "doubao-seedream-5-0-pro-260628",
         "ARK_VIDEO_MODEL": "doubao-seedance-2-5-260628"
@@ -189,10 +189,15 @@ UV_INDEX_URL=https://pypi.org/simple uvx --refresh seedance-mcp-server
 
 ## 版本历史
 
+- **3.0.0**
+  - **Breaking change**：环境变量统一为 `ARK_API_KEY`，移除对 `ARK_KEY` / `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` / `DOUBAO_MODEL` / `DOUBAO_IMAGE_MODEL` 的识别，未设置 `ARK_API_KEY` 即报错
+  - `image_to_video` 默认 `ratio` 由 `16:9` 改为 `adaptive`，修复首帧视频固定比例导致的 `InvalidParameter.TaskTypeConstraint`
+  - 仓库内新增 `skills/doubao-video/`（可直接安装到 ZCode / Claude Code 的 skill，含 portable fallback 脚本 `scripts/doubao_mcp.py`，路径基于 `__file__` 推导，不写死用户目录）
+  - 修复 fallback 脚本的 `AttributeError: 'Namespace' object has no attribute 'out'`、缺失 `--image-mime` 参数等问题
 - **2.4.0**
   - 新增 `image_to_image`（图生图）工具：走 `/images/generations` 的 `image` 参数（URL / Base64 / 本地路径），支持 `seed / guidance_scale / negative_prompt / watermark / response_format / n`
   - 图片工具默认模型升级为 `doubao-seedream-5-0-pro-260628`（支持文生图 + 图生图），移除失效的 `doubao-seedream-3-0-t2i-250415`
-  - 环境变量更名为 `ARK_KEY` / `ARK_BASE_URL` / `ARK_VIDEO_MODEL` / `ARK_IMG_MODEL`；图片与视频模型解析相互独立，图片工具不再误用视频模型；旧的 `DOUBAO_*` 仍作为兼容回退
+  - 环境变量更名为 `ARK_*`（`ARK_KEY` / `ARK_BASE_URL` / `ARK_VIDEO_MODEL` / `ARK_IMG_MODEL`）；图片与视频模型解析相互独立，图片工具不再误用视频模型
 - **2.3.1**
   - 修复 `mcp` 依赖未设上限导致 fresh install 解析到 `mcp` 2.x 而启动崩溃（`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`）的问题：`mcp[cli]>=1.9.4` → `mcp[cli]>=1.9.4,<2`
 - **2.3.0**
