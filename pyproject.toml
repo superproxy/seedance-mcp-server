@@ -1,14 +1,14 @@
 [project]
 name = "seedance-mcp-server"
-version = "3.0.0"
+version = "3.1.0"
 description = "Volcengine Doubao MCP server (Seedance fork): text-to-image, image-to-image, text-to-video and image-to-video tools, with configurable ARK_BASE_URL."
 authors = [
     {name = "sharpcoder",email = "sharpcoder@qq.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
-    "mcp[cli]>=1.9.4,<2",
+    "mcp[cli]>=2.0.0",
     "requests>=2.31.0",
     "openai>=1.86.0",
 ]

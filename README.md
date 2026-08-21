@@ -2,7 +2,7 @@
 
 火山引擎豆包 MCP Server：文生图、图生图、文生视频、图生视频，以及视频任务的异步管理。基于 [`superproxy/doubao_mcp_server`](https://github.com/superproxy/doubao_mcp_server) 修改而来，支持通过环境变量配置 `ARK_BASE_URL` 与图片/视频模型。代码模块名为 `seedance_mcp_server`，PyPI 包名 / CLI 入口为 `seedance-mcp-server`。
 
-当前版本：**v3.0.0**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
+当前版本：**v3.1.0**（PyPI: <https://pypi.org/project/seedance-mcp-server/>）
 
 ## 环境变量
 
@@ -61,7 +61,7 @@
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `ratio` | str | `16:9` / `9:16` / `1:1` / `4:3` / `3:4` / `21:9` / `adaptive` |
-| `duration` | int | 单位秒，常见 `3 / 5 / 10 / 11 / 12 / 15` |
+| `duration` | int | 单位秒，常见 `3 / 5 / 10 / 11 / 12 / 15 / 30` |
 | `resolution` | str | `480p` / `720p` / `1080p` |
 | `seed` | int | 随机种子 |
 | `fps` | int | 帧率 |
@@ -189,6 +189,10 @@ UV_INDEX_URL=https://pypi.org/simple uvx --refresh seedance-mcp-server
 
 ## 版本历史
 
+- **3.1.0**
+  - 升级到 MCP Python SDK **2.0**：`FastMCP` 已在 mcp 2.0 中重命名为 `MCPServer`，导入路径改为 `from mcp.server import MCPServer`；`@mcp.tool()` / `@mcp.resource()` / `mcp.run(transport="stdio")` 用法保持不变
+  - 依赖声明由 `mcp[cli]>=1.9.4,<2` 改为 `mcp[cli]>=2.0.0`；`requires-python` 放宽到 `>=3.10`（mcp 2.0 的最低要求）
+  - `config://settings` 与 README 中的时长列表补上 `30`（`doubao-seedance-2-5` 已实测支持 30s/1080p）
 - **3.0.0**
   - **Breaking change**：环境变量统一为 `ARK_API_KEY`，移除对 `ARK_KEY` / `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` / `DOUBAO_MODEL` / `DOUBAO_IMAGE_MODEL` 的识别，未设置 `ARK_API_KEY` 即报错
   - `image_to_video` 默认 `ratio` 由 `16:9` 改为 `adaptive`，修复首帧视频固定比例导致的 `InvalidParameter.TaskTypeConstraint`

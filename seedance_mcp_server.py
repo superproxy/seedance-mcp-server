@@ -18,13 +18,13 @@ from typing import Any, Dict, List, Optional, Union
 
 import requests
 from openai import OpenAI
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 logger = logging.getLogger("seedance_mcp_server")
 if not logger.handlers:
     logger.addHandler(logging.NullHandler())
 
-mcp = FastMCP("AI Generation Server")
+mcp = MCPServer("AI Generation Server")
 
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 
@@ -877,7 +877,7 @@ def get_server_settings() -> str:
             "adaptive",
         ],
         "supported_video_resolutions": ["480p", "720p", "1080p"],
-        "supported_video_durations_s": [3, 5, 10, 11, 12, 15],
+        "supported_video_durations_s": [3, 5, 10, 11, 12, 15, 30],
         "tools": [
             "text_to_image",
             "image_to_image",
