@@ -202,7 +202,7 @@ def main() -> int:
             call_tool(args.tool, tool_arguments(args), args.uvx)
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        if args.out and result.get("success"):
+        if args.tool in IMAGE_TOOLS and args.out and result.get("success"):
             download(result.get("image_url"), args.out)
         return 0 if result.get("success") else 1
 
